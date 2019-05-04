@@ -145,6 +145,26 @@ exports.executeTemplate = async ({
     {}
   );
 
+  // pull images if needed
+  const {code: pullExitCode, log: pullLog} = await executeCompose({
+    cmd: ['--project-name', baseName, 'pull'],
+    env,
+    resultStream,
+    tempDockerDir,
+    folder,
+    writeStatus: util.writeStatus,
+  });
+
+  if (pullExitCode !== '0') {
+    util.writeStatus(resultStream, {
+      message: `Deployment failed! Docker-compose build exited with code: ${pullExitCode}.`,
+      log: pullLog,
+      level: 'error',
+    });
+    resultStream.end('');
+    return;
+  }
+
   // re-build images if needed
   const {code: buildExitCode, log: buildLog} = await executeCompose({
     cmd: ['--project-name', baseName, 'build'],
