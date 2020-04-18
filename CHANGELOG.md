@@ -1,3 +1,81 @@
+# 6.1.0 / 2020-02-12
+
+- Allow using custom traefik middlewares from exoframe config
+- Add version label to docker images
+- Update node.js to v12.15
+- Update dependencies
+- Use npm instead of yarn for repo
+
+# 6.0.2 / 2019-11-05
+
+Fixes:
+
+- Fix http to https redirect logic (harder than it seems :| )
+
+# 6.0.1 / 2019-11-05
+
+Fixes:
+
+- Correctly redirect http to https when using letsencrypt
+
+# 6.0.0 / 2019-11-05
+
+Breaking changes:
+
+- Exoframe server has been updated to work with Traefik v2.0
+
+Additions:
+
+- Config command now includes additional port, compess and letsencrypt settings
+- Allow disabling letsencrypt on inidividual deployments
+
+Fixes:
+
+- Use server volume for traefik config mapping when running in docker
+
+For migration guide see [Exoframe CLI Changelog](https://github.com/exoframejs/exoframe/blob/master/CHANGELOG.md#600--2019-11-05)
+
+# 5.0.4 / 2019-08-28
+
+- Pin traefik to v1.7.x
+- Execute 'npm build' in default node template if present
+
+# 5.0.3 / 2019-07-29
+
+- Correctly cleanup old containers on deployment update (https://github.com/exoframejs/exoframe/issues/253)
+
+# 5.0.2 / 2019-07-19
+
+- Fix build process for newer ncc versions
+
+# 5.0.1 / 2019-07-17
+
+- Update node.js to v12.6 in dockerfile
+
+# 5.0.0 / 2019-07-17
+
+Additions:
+
+- Add function deployments
+- Add linting, npm scripts and run it in travis
+
+Changes:
+
+- Use node 12 as lowest required version
+- Remove pkg and use node:alpine base for resulting image
+
+Fixes:
+
+- Rename nginx template to static template
+- Show warning instead of error when user config does not exist
+
+# 4.1.2 / 2019-05-14
+
+- Fix traefik version fetching for new versions of traefik images
+- Fix compose install in Dockerfile
+- Correctly throw errors when docker-compose fails
+- Correctly throw error when template wasn't found
+
 # 4.1.1 / 2019-03-31
 
 - Fix debug docker images, correctly include home html

@@ -6,6 +6,17 @@ const {getConfig} = require('../config');
 const {getPlugins} = require('../plugins');
 const logger = require('../logger');
 
+/**
+ * Inspects given image and tries to determine exposed port
+ */
+const portFromImage = async image => {
+  const img = await docker.getImage(image).inspect();
+  const ports = Object.keys(img.Config.ExposedPorts);
+  const firstPort = ports[0];
+  const port = firstPort.split('/')[0];
+  return port;
+};
+
 exports.startFromParams = async ({
   image,
   deploymentName,
@@ -13,6 +24,7 @@ exports.startFromParams = async ({
   username,
   backendName,
   frontend,
+  port,
   hostname,
   restartPolicy,
   Env = [],
@@ -21,7 +33,6 @@ exports.startFromParams = async ({
   additionalNetworks = [],
 }) => {
   const name = deploymentName || nameFromImage(image);
-  const backend = backendName || name;
 
   // get server config
   const serverConfig = getConfig();
@@ -57,14 +68,47 @@ exports.startFromParams = async ({
     'exoframe.deployment': name,
     'exoframe.user': username,
     'exoframe.project': projectName,
-    'traefik.backend': backend,
     'traefik.docker.network': serverConfig.exoframeNetwork,
     'traefik.enable': 'true',
   });
 
+  // create middlewares array
+  const middlewares = [];
+
+  // if we have letsencrypt enabled - enable https redirect
+  if (serverConfig.letsencrypt) {
+    Labels[`traefik.http.middlewares.${name}-https.redirectscheme.scheme`] = 'https';
+    Labels[`traefik.http.routers.${name}.tls.certresolver`] = 'exoframeChallenge';
+    Labels[`traefik.http.routers.${name}.entrypoints`] = 'websecure';
+    // redirect http to https
+    Labels[`traefik.http.middlewares.${name}-redirect.redirectscheme.scheme`] = 'https';
+    Labels[`traefik.http.routers.${name}-web.entrypoints`] = 'web';
+    Labels[`traefik.http.routers.${name}-web.middlewares`] = `${name}-redirect@docker`;
+    middlewares.push(`${name}-https@docker`);
+  }
+
+  // if we have compression on config - enable compression middleware
+  if (serverConfig.compress) {
+    Labels[`traefik.http.middlewares.${name}-compress.compress`] = 'true';
+    middlewares.push(`${name}-compress@docker`);
+  }
+
   // if host is set - add it to config
   if (frontend && frontend.length) {
-    Labels['traefik.frontend.rule'] = frontend;
+    let usePort = port;
+    // if user hasn't given port - detect it from image exposed ports
+    if (!usePort) {
+      usePort = await portFromImage(image).catch(() => 80);
+      logger.debug('Detected deployment port:', usePort);
+    }
+    Labels[`traefik.http.services.${projectName}.loadbalancer.server.port`] = String(port);
+    Labels[`traefik.http.routers.${name}.rule`] = frontend;
+    Labels[`traefik.http.routers.${name}-web.rule`] = frontend;
+  }
+
+  // remove or stringify all middlewares
+  if (middlewares.length > 0) {
+    Labels[`traefik.http.routers.${name}.middlewares`] = middlewares.join(',');
   }
 
   // run startFromParams via plugins if available
@@ -86,6 +130,7 @@ exports.startFromParams = async ({
       username,
       backendName,
       frontend,
+      port,
       hostname,
       restartPolicy,
       serviceLabels: Labels,
@@ -162,7 +207,8 @@ exports.start = async ({image, username, folder, resultStream, existing = []}) =
   // generate host
   const host = getHost({serverConfig, name, config});
 
-  const Env = getEnv({username, config, name, project, host}).map((pair) => pair.join('='));
+  // generate env vars
+  const Env = getEnv({username, config, name, project, host}).map(pair => pair.join('='));
 
   // construct restart policy
   let RestartPolicy = {};
@@ -183,36 +229,78 @@ exports.start = async ({image, username, folder, resultStream, existing = []}) =
   }
   const additionalLabels = config.labels || {};
 
-  // construct backend name from host (if available) or name
-  const backend = host && host.length ? host : name;
+  const configMiddlewares = Object.keys(additionalLabels)
+    // we want all middlewares
+    .filter(label => label.startsWith('traefik.http.middlewares.'))
+    // map them to name with @docker postfix
+    .map(label => {
+      const [middlewareName] = label.replace('traefik.http.middlewares.', '').split('.');
+      return `${middlewareName}@docker`;
+    })
+    // concat with other middlewares from config if present
+    .concat(config.middlewares || []);
 
   const Labels = Object.assign({}, additionalLabels, {
     'exoframe.deployment': name,
     'exoframe.user': username,
     'exoframe.project': project,
-    'traefik.backend': backend,
     'traefik.docker.network': serverConfig.exoframeNetwork,
     'traefik.enable': 'true',
   });
 
+  // create middlewares array
+  const middlewares = configMiddlewares || [];
+
+  // if we have letsencrypt enabled - enable https redirect
+  if (serverConfig.letsencrypt && (config.letsencrypt || config.letsencrypt === undefined)) {
+    Labels[`traefik.http.middlewares.${name}-https.redirectscheme.scheme`] = 'https';
+    Labels[`traefik.http.routers.${name}.tls.certresolver`] = 'exoframeChallenge';
+    Labels[`traefik.http.routers.${name}.entrypoints`] = 'websecure';
+    // redirect http to https
+    Labels[`traefik.http.middlewares.${name}-redirect.redirectscheme.scheme`] = 'https';
+    Labels[`traefik.http.routers.${name}-web.entrypoints`] = 'web';
+    Labels[`traefik.http.routers.${name}-web.middlewares`] = `${name}-redirect@docker`;
+    middlewares.push(`${name}-https@docker`);
+  }
+
+  // if we have compression on config - enable compression middleware
+  if (config.compress || (config.compress === undefined && serverConfig.compress)) {
+    Labels[`traefik.http.middlewares.${name}-compress.compress`] = 'true';
+    middlewares.push(`${name}-compress@docker`);
+  }
+
   // if host is set - add it to config
   if (host && host.length) {
-    Labels['traefik.frontend.rule'] = `Host:${host}`;
+    let {port} = config;
+    // if user hasn't given port - detect it from image exposed ports
+    if (!port) {
+      // try to detect port and default to 80 if failed
+      port = await portFromImage(image).catch(() => 80);
+      logger.debug('Detected deployment port:', port);
+    }
+    Labels[`traefik.http.services.${project}.loadbalancer.server.port`] = String(port);
+    const rule = host.includes('Host(') ? host : `Host(\`${host}\`)`;
+    Labels[`traefik.http.routers.${name}.rule`] = rule;
+    Labels[`traefik.http.routers.${name}-web.rule`] = rule;
   }
 
   // if rate-limit is set - add it to config
   if (config.rateLimit) {
-    // we're using IP-based rate-limit
-    Labels['traefik.frontend.rateLimit.extractorFunc'] = 'client.ip';
     // set values from project config
-    Labels['traefik.frontend.rateLimit.rateSet.exo.period'] = config.rateLimit.period;
-    Labels['traefik.frontend.rateLimit.rateSet.exo.average'] = String(config.rateLimit.average);
-    Labels['traefik.frontend.rateLimit.rateSet.exo.burst'] = String(config.rateLimit.burst);
+    Labels[`traefik.http.middlewares.${name}-rate.ratelimit.average`] = String(config.rateLimit.average);
+    Labels[`traefik.http.middlewares.${name}-rate.ratelimit.burst`] = String(config.rateLimit.burst);
+    middlewares.push(`${name}-rate@docker`);
   }
 
   // if basic auth is set - add it to config
   if (config.basicAuth && config.basicAuth.length) {
-    Labels['traefik.frontend.auth.basic.users'] = config.basicAuth;
+    Labels[`traefik.http.middlewares.${name}-auth.basicauth.users`] = config.basicAuth;
+    middlewares.push(`${name}-auth@docker`);
+  }
+
+  // remove or stringify all middlewares
+  if (middlewares.length > 0) {
+    Labels[`traefik.http.routers.${name}.middlewares`] = [...new Set(middlewares)].join(',');
   }
 
   // run startFromParams via plugins if available

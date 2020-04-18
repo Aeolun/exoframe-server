@@ -9,11 +9,14 @@ const getPort = require('get-port');
 const authToken = require('./fixtures/authToken');
 const {startServer} = require('../src');
 const docker = require('../src/docker/docker');
-const {pullImage, initDocker} = require('../src/docker/init');
+const {initDocker} = require('../src/docker/init');
+const {pullImage} = require('../src/docker/util');
 const {sleep} = require('../src/util');
 
 // old traefik and server images
 const traefikTag = 'traefik:1.3-alpine';
+const traefikVersion = 'latest';
+const traefikNewTag = `traefik:${traefikVersion}`;
 const serverTag = 'exoframe/server:1.0.0';
 
 // options base
@@ -43,7 +46,7 @@ beforeAll(async () => {
   // get all images
   const oldImages = await docker.listImages();
   // remove current :latest images
-  const latestTraefik = oldImages.find(img => img.RepoTags && img.RepoTags.includes('traefik:latest'));
+  const latestTraefik = oldImages.find(img => img.RepoTags && img.RepoTags.includes(traefikNewTag));
   if (latestTraefik) {
     const limg = docker.getImage(latestTraefik.Id);
     await limg.remove({force: true});
@@ -61,7 +64,7 @@ beforeAll(async () => {
   // get old one and tag it as latest
   oldTraefik = images.find(img => img.RepoTags && img.RepoTags.includes(traefikTag));
   const timg = docker.getImage(oldTraefik.Id);
-  await timg.tag({repo: 'traefik', tag: 'latest'});
+  await timg.tag({repo: 'traefik', tag: traefikVersion});
   oldServer = images.find(img => img.RepoTags && img.RepoTags.includes(serverTag));
   const simg = docker.getImage(oldServer.Id);
   await simg.tag({repo: 'exoframe/server', tag: 'latest'});
@@ -117,7 +120,7 @@ test('Should deploy traefik', async done => {
   expect(container.Ports.find(p => p.PrivatePort === 80)).toBeTruthy();
   expect(container.Ports.find(p => p.PublicPort === 80)).toBeTruthy();
   expect(container.Mounts.find(m => m.Destination === '/var/run/docker.sock')).toBeTruthy();
-  expect(container.Mounts.find(m => m.Destination === '/var/acme')).toBeTruthy();
+  expect(container.Mounts.find(m => m.Destination === '/var/traefik')).toBeTruthy();
 
   // cleanup
   const instance = docker.getContainer(container.Id);
@@ -139,7 +142,7 @@ test('Should update traefik', async done => {
 
   // check docker services
   const allImages = await docker.listImages();
-  const newTraefik = allImages.find(it => it.RepoTags && it.RepoTags.includes('traefik:latest'));
+  const newTraefik = allImages.find(it => it.RepoTags && it.RepoTags.includes(traefikNewTag));
   expect(newTraefik.Id).not.toBe(oldTraefik.Id);
 
   done();

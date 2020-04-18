@@ -7,14 +7,15 @@ const uuidv1 = require('uuid/v1');
 // our modules
 const logger = require('../logger');
 const util = require('../util');
-const {getConfig, tempDockerDir} = require('../config');
+const {getConfig, tempDockerDir, faasFolder} = require('../config');
 const docker = require('../docker/docker');
-const {pullImage} = require('../docker/init');
+const {pullImage} = require('../docker/util');
 const {build} = require('../docker/build');
 const {start} = require('../docker/start');
 const getTemplates = require('../docker/templates');
 const {removeContainer} = require('../docker/util');
 const {getPlugins} = require('../plugins');
+const {registerFunction} = require('exoframe-faas');
 
 // destruct locally used functions
 const {sleep, cleanTemp, unpack, getProjectConfig, projectFromConfig} = util;
@@ -33,7 +34,7 @@ const deploy = async ({username, folder, existing, resultStream}) => {
   // generate template props
   const templateProps = {
     config,
-    serverConfig,
+    serverConfig: {...serverConfig, faasFolder},
     existing,
     username,
     resultStream,
@@ -44,6 +45,9 @@ const deploy = async ({username, folder, existing, resultStream}) => {
       build,
       start,
       pullImage,
+    },
+    faas: {
+      registerFunction,
     },
     util: Object.assign({}, util, {
       logger,
@@ -171,13 +175,16 @@ module.exports = fastify => {
       const resultStream = _();
       // deploy new versions
       deploy({username, folder, payload: request.payload, resultStream});
-      // schedule cleanup
-      scheduleCleanup({username, project, existing});
       // reply with deploy stream
       const responseStream = new Readable().wrap(resultStream);
       reply.code(200).send(responseStream);
-      // schedule temp folder cleanup on end
-      responseStream.on('end', () => cleanTemp(folder));
+      // schedule temp folder and container cleanup on deployment end
+      responseStream.on('end', () => {
+        // schedule container cleanup
+        scheduleCleanup({username, project, existing});
+        // clean temp folder
+        cleanTemp(folder);
+      });
     },
   });
 };
